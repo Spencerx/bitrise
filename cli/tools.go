@@ -24,10 +24,12 @@ const (
 	outputFormatJSON      = "json"
 	outputFormatBash      = "bash"
 
-	toolsSetupSubcommandName   = "setup"
-	toolsInstallSubcommandName = "install"
-	toolsLatestSubcommandName  = "latest"
-	toolsInfoCommandName       = "info"
+	toolsSetupSubcommandName    = "setup"
+	toolsInstallSubcommandName  = "install"
+	toolsLatestSubcommandName   = "latest"
+	toolsInfoCommandName        = "info"
+	toolsVersionsSubcommandName = "versions"
+	toolsCatalogSubcommandName  = "catalog"
 
 	toolsConfigKey      = "config"
 	toolsConfigShortKey = "c"
@@ -60,6 +62,12 @@ var (
 	flToolsOutputFormat = cli.StringFlag{
 		Name:  toolsOutputFormatKey + ", " + toolsOutputFormatShortKey,
 		Usage: `Output format of the env vars that activate installed tools. Options: plaintext, json, bash`,
+		Value: outputFormatPlaintext,
+	}
+
+	flToolsVersionsOutputFormat = cli.StringFlag{
+		Name:  toolsOutputFormatKey + ", " + toolsOutputFormatShortKey,
+		Usage: `Output format. Options: plaintext, json`,
 		Value: outputFormatPlaintext,
 	}
 
@@ -204,6 +212,56 @@ EXAMPLES:
 	},
 }
 
+var toolsCatalogSubcommand = cli.Command{
+	Name:  toolsCatalogSubcommandName,
+	Usage: "List officially supported tools",
+	UsageText: `bitrise tools catalog [--format FORMAT]
+
+EXAMPLES:
+   bitrise tools catalog
+   bitrise tools catalog --format json`,
+	Action: func(c *cli.Context) error {
+		logCommandParameters(c)
+		if err := toolsListTools(c); err != nil {
+			log.Errorf("Failed to list tools: %s", err)
+			os.Exit(1)
+		}
+		return nil
+	},
+	Flags: []cli.Flag{
+		flToolsVersionsOutputFormat,
+	},
+}
+
+var toolsVersionsSubcommand = cli.Command{
+	Name:  toolsVersionsSubcommandName,
+	Usage: "List available versions for a supported tool",
+	UsageText: `bitrise tools versions TOOL [VERSION_PREFIX] [--format FORMAT]
+
+TOOL: tool name (e.g. nodejs, golang, ruby)
+VERSION_PREFIX: optional version prefix to filter by (e.g. 22, 3.12)
+
+EXAMPLES:
+   bitrise tools versions nodejs
+   bitrise tools versions nodejs 22
+   bitrise tools versions nodejs --format json`,
+	Action: func(c *cli.Context) error {
+		logCommandParameters(c)
+		if err := toolsVersions(c); err != nil {
+			log.Errorf("Failed to list versions: %s", err)
+			os.Exit(1)
+		}
+		return nil
+	},
+	Flags: []cli.Flag{
+		cli.StringFlag{
+			Name:  toolsProviderKey + ", " + toolsProviderShortKey,
+			Usage: `Tool provider to use (asdf/mise) (default: "mise")`,
+		},
+		flToolsVersionsOutputFormat,
+	},
+}
+
 var toolsCommand = cli.Command{
 	Name:  "tools",
 	Usage: "Manage available tools from inside the workflow.",
@@ -212,6 +270,8 @@ var toolsCommand = cli.Command{
 		toolsSetupSubcommand,
 		toolsInstallSubcommand,
 		toolsLatestSubcommand,
+		toolsVersionsSubcommand,
+		toolsCatalogSubcommand,
 	},
 }
 
@@ -636,6 +696,76 @@ func toolsInstall(c *cli.Context) error {
 		return fmt.Errorf("convert to output format: %w", err)
 	}
 	fmt.Println(output)
+
+	return nil
+}
+
+func toolsListTools(c *cli.Context) error {
+	format := c.String(toolsOutputFormatKey)
+
+	tools := toolprovider.SupportedTools()
+
+	switch format {
+	case outputFormatJSON:
+		data, err := json.MarshalIndent(map[string]any{
+			"tools": tools,
+		}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	case outputFormatPlaintext:
+		for _, t := range tools {
+			fmt.Println(t)
+		}
+	default:
+		return fmt.Errorf("invalid --format: %s", format)
+	}
+
+	return nil
+}
+
+func toolsVersions(c *cli.Context) error {
+	toolName := c.Args().First()
+	if toolName == "" {
+		return fmt.Errorf("tool name is required. Usage: bitrise tools versions TOOL [VERSION_PREFIX]. Run 'bitrise tools catalog' to see supported tools")
+	}
+	versionPrefix := c.Args().Get(1)
+
+	providerID := c.String(toolsProviderKey)
+	if providerID == "" {
+		providerID = "mise"
+	}
+
+	format := c.String(toolsOutputFormatKey)
+	silent := format == outputFormatJSON
+
+	tp, err := toolprovider.CreateProvider(providerID, false, silent, nil)
+	if err != nil {
+		return err
+	}
+
+	versions, err := toolprovider.ListToolVersions(toolName, versionPrefix, tp)
+	if err != nil {
+		return err
+	}
+
+	switch format {
+	case outputFormatJSON:
+		data, err := json.MarshalIndent(map[string]any{
+			"versions": versions,
+		}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	case outputFormatPlaintext:
+		for _, v := range versions {
+			fmt.Println(v)
+		}
+	default:
+		return fmt.Errorf("invalid --format: %s", format)
+	}
 
 	return nil
 }
